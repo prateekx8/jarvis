@@ -1,0 +1,11 @@
+# Build output
+app/.build/
+app/build/
+.swiftpm/
+# Python
+tts/.venv/
+__pycache__/
+# Large downloads (fetched by Jarvis setup)
+tts/models/
+tts/samples/
+.DS_Store
