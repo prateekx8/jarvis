@@ -2,13 +2,25 @@
 
 How it works, and the plan for Shortcuts and iPhone control: [ARCHITECTURE.md](ARCHITECTURE.md).
 
+## Install (one command)
+macOS 14 or newer. Paste into Terminal:
+```bash
+curl -fsSL https://raw.githubusercontent.com/prateekx8/jarvis/main/install.sh | bash
+```
+It builds Jarvis from this repo, puts it in Applications and installs everything it needs: no Homebrew and no
+system Python. The natural voice gets a private Python (via [uv](https://github.com/astral-sh/uv)) and the Kokoro
+model, all inside `~/Library/Application Support/Jarvis`; offline answers get Ollama and `gemma2:2b`. About 3 GB
+in total. The first time, macOS may ask to install the Command Line Tools (needed to build): click Install, then
+run the command again. When Jarvis opens, allow Microphone, Speech Recognition and Automation.
+
+Already cloned? Run `./install.sh`. Options: `--no-voice` (use the macOS voice), `--no-ollama` (no offline model),
+`--no-open`. Re-run it any time to update. If a firewall such as LuLu asks about `uv`, `python` or Ollama, allow it.
+
 ## The app (recommended): Jarvis
 Menu bar app in `app/`: on-device speech (Apple's Dictation engine), "Hey Jarvis" wake word, ⌥Space hotkey,
 J.A.R.V.I.S.-style console with a live log (also written to `~/Library/Logs/VoiceBrowser.log`).
 
-```
-cd app && ./build.sh && open build/VoiceBrowser.app
-```
+Build only (for development): `cd app && ./build.sh && open build/Jarvis.app`
 - Say **"Hey Jarvis, open YouTube"** (one breath), or "Hey Jarvis" → chime → your command.
 - Or **hold ⌥Space**, speak, release. Or **tap ⌥Space**, speak, pause.
 - Menu bar 🎙: wake word on/off, Keep Console Open, Open Log File, model (default `gemma2:2b`), browser, spoken replies, recent commands.

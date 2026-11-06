@@ -127,21 +127,31 @@ final class SetupModel: ObservableObject {
 
     private func ollama() async throws {
         if await ollamaUp() { return update("ollama") { $0.detail = "Running" } }
-        let appURL = NSWorkspace.shared.urlForApplication(withBundleIdentifier: "com.electron.ollama")
-            ?? ["/Applications/Ollama.app"].map(URL.init(fileURLWithPath:)).first { FileManager.default.fileExists(atPath: $0.path) }
+        let home = FileManager.default.homeDirectoryForCurrentUser
+        var appURL = NSWorkspace.shared.urlForApplication(withBundleIdentifier: "com.electron.ollama")
+            ?? ["/Applications/Ollama.app", home.appendingPathComponent("Applications/Ollama.app").path]
+                .map(URL.init(fileURLWithPath:)).first { FileManager.default.fileExists(atPath: $0.path) }
         if appURL == nil {
-            if let brew = ["/opt/homebrew/bin/brew", "/usr/local/bin/brew"].first(where: FileManager.default.isExecutableFile) {
-                update("ollama") { $0.detail = "Installing with Homebrew…" }
-                try await shell(brew, ["install", "--cask", "ollama"])
-            } else {
-                NSWorkspace.shared.open(URL(string: "https://ollama.com/download/mac")!)
-                update("ollama") { $0.detail = "Download Ollama from the page that just opened, install it, then press Set Up again." }
-                throw fail("Ollama isn't installed yet.")
+            // Download the official app (no Homebrew needed) into Applications, or ~/Applications without admin rights.
+            let apps = FileManager.default.isWritableFile(atPath: "/Applications")
+                ? URL(fileURLWithPath: "/Applications") : home.appendingPathComponent("Applications")
+            try FileManager.default.createDirectory(at: apps, withIntermediateDirectories: true)
+            let zip = FileManager.default.temporaryDirectory.appendingPathComponent("Ollama-darwin.zip")
+            try await Downloader.fetch(URL(string: "https://ollama.com/download/Ollama-darwin.zip")!, to: zip) { [weak self] done, total in
+                Task { @MainActor in
+                    self?.update("ollama") {
+                        $0.detail = "Downloading Ollama · \(Int(done / 1e6)) / \(Int(total / 1e6)) MB"
+                        $0.progress = total > 0 ? done / total : nil
+                    }
+                }
             }
+            update("ollama") { $0.detail = "Installing…"; $0.progress = nil }
+            try await shell("/usr/bin/ditto", ["-x", "-k", zip.path, apps.path])
+            try? FileManager.default.removeItem(at: zip)
+            appURL = apps.appendingPathComponent("Ollama.app")
         }
         update("ollama") { $0.detail = "Starting…" }
-        let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: "com.electron.ollama")
-            ?? URL(fileURLWithPath: "/Applications/Ollama.app")
+        let url = appURL ?? URL(fileURLWithPath: "/Applications/Ollama.app")
         NSWorkspace.shared.openApplication(at: url, configuration: NSWorkspace.OpenConfiguration(), completionHandler: nil)
         for _ in 0..<40 {
             if await ollamaUp() { return update("ollama") { $0.detail = "Running" } }
@@ -209,13 +219,17 @@ final class SetupModel: ObservableObject {
         // 3. Install only what's missing, into Jarvis's own folder.
         let fm = FileManager.default
         if python == nil {
-            update("voice") { $0.detail = "Finding Python 3.10 or newer…" }
-            let base = try await findPython()
-            update("voice") { $0.detail = "Installing voice engine (about 1 minute)…" }
+            update("voice") { $0.detail = "Getting a private Python…" }
             try fm.createDirectory(at: Paths.tts, withIntermediateDirectories: true)
-            try await shell(base, ["-m", "venv", Paths.venv.path])
-            try await shell(Paths.python.path, ["-m", "pip", "install", "-q", "--upgrade", "pip"])
-            try await shell(Paths.python.path, ["-m", "pip", "install", "-q", "kokoro-onnx"])
+            let uv = try await uvTool()
+            let cache = Paths.support.appendingPathComponent(".uv-cache")
+            let env = ["UV_PYTHON_INSTALL_DIR": Paths.support.appendingPathComponent("python").path,
+                       "UV_CACHE_DIR": cache.path, "UV_NO_CONFIG": "1"]
+            update("voice") { $0.detail = "Installing voice engine (about 1 minute)…" }
+            try? fm.removeItem(at: Paths.venv)
+            try await shell(uv, ["venv", "--quiet", "--python", "3.12", "--managed-python", Paths.venv.path], env: env)
+            try await shell(uv, ["pip", "install", "--quiet", "--python", Paths.python.path, "kokoro-onnx"], env: env)
+            try? fm.removeItem(at: cache)
         }
         if models == nil {
             try fm.createDirectory(at: Paths.models, withIntermediateDirectories: true)
@@ -237,23 +251,27 @@ final class SetupModel: ObservableObject {
         update("voice") { $0.detail = "Installed"; $0.progress = nil }
     }
 
-    private func findPython() async throws -> String {
-        let candidates = ["/opt/homebrew/bin/python3.13", "/opt/homebrew/bin/python3.12", "/opt/homebrew/bin/python3",
-                          "/usr/local/bin/python3", "/Library/Frameworks/Python.framework/Versions/Current/bin/python3",
-                          "/usr/bin/python3"]
-        for path in candidates where FileManager.default.isExecutableFile(atPath: path) {
-            let v = try? await shell(path, ["-c", "import sys; print(sys.version_info >= (3, 10))"])
-            if v?.contains("True") == true { return path }
-        }
-        if let brew = ["/opt/homebrew/bin/brew", "/usr/local/bin/brew"].first(where: FileManager.default.isExecutableFile) {
-            update("voice") { $0.detail = "Installing Python with Homebrew…" }
-            try await shell(brew, ["install", "python@3.13"])
-            for p in ["/opt/homebrew/bin/python3.13", "/usr/local/bin/python3.13"] where FileManager.default.isExecutableFile(atPath: p) {
-                return p
-            }
-        }
-        NSWorkspace.shared.open(URL(string: "https://www.python.org/downloads/macos/")!)
-        throw fail("Python 3.10+ is needed for the natural voice. Install it from the page that just opened, then retry.")
+    /// uv: a single-file tool that installs a private Python, so Jarvis needs neither Homebrew nor a system Python.
+    /// Kept in ~/Library/Application Support/Jarvis/tools (the same place install.sh puts it).
+    private func uvTool() async throws -> String {
+        let tools = Paths.support.appendingPathComponent("tools")
+        let uv = tools.appendingPathComponent("uv")
+        if FileManager.default.isExecutableFile(atPath: uv.path) { return uv.path }
+        try FileManager.default.createDirectory(at: tools, withIntermediateDirectories: true)
+        #if arch(arm64)
+        let arch = "aarch64"
+        #else
+        let arch = "x86_64"
+        #endif
+        let tmp = FileManager.default.temporaryDirectory.appendingPathComponent("jarvis-uv-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tmp) }
+        let tgz = tmp.appendingPathComponent("uv.tar.gz")
+        let url = URL(string: "https://github.com/astral-sh/uv/releases/latest/download/uv-\(arch)-apple-darwin.tar.gz")!
+        try await Downloader.fetch(url, to: tgz) { _, _ in }
+        try await shell("/usr/bin/tar", ["-xzf", tgz.path, "-C", tmp.path])
+        try FileManager.default.moveItem(at: tmp.appendingPathComponent("uv-\(arch)-apple-darwin/uv"), to: uv)
+        return uv.path
     }
 
     // MARK: Permissions and Chrome
@@ -316,14 +334,14 @@ final class SetupModel: ObservableObject {
     // MARK: Helpers
 
     @discardableResult
-    private func shell(_ path: String, _ args: [String]) async throws -> String {
+    private func shell(_ path: String, _ args: [String], env extra: [String: String] = [:]) async throws -> String {
         try await Task.detached {
             let p = Process()
             p.executableURL = URL(fileURLWithPath: path)
             p.arguments = args
             var env = ProcessInfo.processInfo.environment
             env["PATH"] = "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"
-            env["HOMEBREW_NO_AUTO_UPDATE"] = "1"
+            env.merge(extra) { $1 }
             p.environment = env
             let out = Pipe()
             p.standardOutput = out
