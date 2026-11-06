@@ -61,7 +61,13 @@ enum BrainError: LocalizedError {
 
 enum Brain {
     static let host = ProcessInfo.processInfo.environment["OLLAMA_HOST"] ?? "http://127.0.0.1:11434"
+    /// The Ollama model used when Apple's on-device model isn't available (and the one `ollama pull` installs).
     static let defaultModel = "gemma2:2b"
+    static let appleModel = AppleModel.id
+    /// The model to use unless the user picked one: Apple's built-in on-device model on a Mac that has it, else Gemma via Ollama.
+    static var preferredModel: String { AppleModel.available ? appleModel : defaultModel }
+    /// Name for the log, menu and spoken "via" notes.
+    static func label(_ model: String) -> String { model == appleModel ? AppleModel.label : model }
 
     static let actions = ["open_url", "search", "new_tab", "close_tab", "switch_tab", "back",
                           "forward", "reload", "scroll", "click", "type", "summarize", "escalate",
@@ -201,7 +207,7 @@ enum Brain {
             return r.location == NSNotFound || NSMaxRange(r) > o.length ? s : o.substring(with: r)
         }
         if let q = rest(#"^(?:ask |hey |ok )?claude[ ,:]+(?:to )?(.+)$"#) { return Action(action: "ask", text: q, engine: "claude") }
-        if let q = rest(#"^ask (?:locally|offline|gemma|ollama)[ ,:]+(.+)$"#) { return Action(action: "ask", text: q, engine: "local") }
+        if let q = rest(#"^ask (?:locally|offline|on-device|on device|apple|gemma|ollama)[ ,:]+(.+)$"#) { return Action(action: "ask", text: q, engine: "local") }
         if let fact = rest(#"^(?:please )?(?:remember|note|keep in mind)(?: that)?[ ,:]+(.+)$"#) {
             return Action(action: "remember", text: cased(fact))
         }
@@ -243,6 +249,12 @@ enum Brain {
     }
 
     static func chat(_ messages: [[String: String]], model: String, schema: [String: Any]? = nil) async throws -> String {
+        var model = model
+        // Apple's model is part of the OS (no extra load on the Mac), so the CPU guardrail doesn't apply to it.
+        if model == appleModel {
+            if AppleModel.available { return try await AppleModel.chat(messages, schema: schema) }
+            model = defaultModel // no longer available (Apple Intelligence off, older macOS): fall back to Ollama
+        }
         if CPUGuard.busy { throw BrainError.cpuBusy(CPUGuard.usage) }
         var body: [String: Any] = ["model": model, "messages": messages, "stream": false,
                                    "keep_alive": "30m", "options": ["temperature": 0]]
@@ -257,10 +269,16 @@ enum Brain {
 
     /// Loads the model into memory so the first spoken command is fast.
     static func warmUp(model: String) async {
+        if model == appleModel { return } // part of the OS; nothing to load
         _ = try? await post("/api/generate", ["model": model, "keep_alive": "30m"])
     }
 
+    /// Models Jarvis can use now: Apple's on-device one (when this Mac has it) first, then whatever Ollama has.
     static func installedModels() async -> [String] {
+        (AppleModel.available ? [appleModel] : []) + (await ollamaModels())
+    }
+
+    static func ollamaModels() async -> [String] {
         guard let url = URL(string: "\(host)/api/tags"),
               let (data, _) = try? await URLSession.shared.data(from: url),
               let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],

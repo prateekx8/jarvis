@@ -22,7 +22,7 @@ enum Main {
         }
         // `VoiceBrowser --do "what time is it"` also carries it out.
         if args.count > 2, args[1] == "--parse" || args[1] == "--do" {
-            let model = UserDefaults.standard.string(forKey: "model") ?? Brain.defaultModel
+            let model = UserDefaults.standard.string(forKey: "model") ?? Brain.preferredModel
             Task {
                 for text in args.dropFirst(2) {
                     do {
@@ -123,7 +123,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private let memory: Memory? = try? Memory()
 
     private var model: String {
-        get { UserDefaults.standard.string(forKey: "model") ?? Brain.defaultModel }
+        get { UserDefaults.standard.string(forKey: "model") ?? Brain.preferredModel }
         set { UserDefaults.standard.set(newValue, forKey: "model") }
     }
     private var speak: Bool {
@@ -170,7 +170,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         buildMenu()
         hud = HUD(state: state)
         state.pinned = pinned
-        state.log(.sys, "Online · model \(model) · \(driver.app.rawValue)")
+        state.log(.sys, "Online · model \(Brain.label(model)) · \(driver.app.rawValue)")
         if pinned { hud.show() }
 
         listener.onPartial = { [weak self] text in
@@ -286,6 +286,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
         Task {
             installedModels = await Brain.installedModels()
+            if let why = AppleModel.unavailableReason, model == Brain.appleModel { state.log(.sys, "\(why); using \(Brain.defaultModel) via Ollama") }
             if installedModels.isEmpty {
                 state.log(.err, "Ollama unreachable or no models installed")
             } else if !installedModels.contains(model) {
@@ -293,7 +294,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             }
             let t = Date()
             await Brain.warmUp(model: model)
-            state.log(.sys, "\(model) loaded in \(ms(since: t))")
+            state.log(.sys, "\(Brain.label(model)) loaded in \(ms(since: t))")
         }
     }
 
@@ -521,7 +522,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         hideWork?.cancel()
         state.phase = .thinking
         state.transcript = command
-        state.detail = "Thinking with \(model)…"
+        state.detail = "Thinking with \(Brain.label(model))…"
         hud.show()
         recent = [command] + recent.filter { $0 != command }
         var said = ""
@@ -635,7 +636,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             if a.engine == "claude" || answerMode == "claude" { note = "Claude isn't connected, so here's an offline answer. " }
         }
 
-        state.detail = "Answering offline with \(model)…"
+        state.detail = "Answering offline with \(Brain.label(model))…"
         let page = context["page_title"].map { "\n(The user is looking at: \($0) — \(context["page_url"] ?? ""))" } ?? ""
         let facts = memory?.relevantFacts(question).map(\.text) ?? []
         let known = facts.isEmpty ? "" : "\n\nThings the user told you to remember:\n" + facts.map { "- \($0)" }.joined(separator: "\n")
@@ -644,7 +645,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
         let reply = try await Brain.chat([["role": "system", "content": Self.localSystem + known],
                                           ["role": "user", "content": question + page]], model: model)
-        return (note + Self.spoken(reply), "\(model) (offline)")
+        return (note + Self.spoken(reply), "\(Brain.label(model)) (offline)")
     }
 
     /// Text that reads well aloud: no markdown symbols.
@@ -711,10 +712,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             }
         }
         if text == nil {
-            state.detail = "Drafting offline with \(model)…"
+            state.detail = "Drafting offline with \(Brain.label(model))…"
             text = try await Brain.chat([["role": "system", "content": Self.draftSystem],
                                          ["role": "user", "content": "Conversation:\n\(convo.text.prefix(4000))\n\n\(how)"]], model: model)
-            via = "\(model) (offline)"
+            via = "\(Brain.label(model)) (offline)"
         }
         let reply = (text ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         NSPasteboard.general.clearContents()
@@ -850,7 +851,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let history = (memory?.recent(4) ?? []).reversed().compactMap { e in e.action.map { "\(e.heard) → \($0.summary)" } }
         do {
             let (a, viaModel) = try await Brain.parse(command, model: model, history: Array(history))
-            return (a, viaModel ? model : "instant rule")
+            return (a, viaModel ? Brain.label(model) : "instant rule")
         } catch BrainError.cpuBusy(let u) {
             let claudeReachable = bridge.claudeConnected ? true : await ClaudeCLI.signedIn()
             if claudeReachable {
@@ -912,7 +913,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let reply = try await Brain.chat([["role": "system", "content": Self.localSystem],
                                           ["role": "user", "content": "Text on the user's screen:\n\(shot.text.prefix(4000))\n\nIt looks like: \(shot.labels.joined(separator: ", "))\n\nQuestion: \(question)"]],
                                          model: model)
-        return (Self.spoken(reply), "\(model) (offline, screen text)")
+        return (Self.spoken(reply), "\(Brain.label(model)) (offline, screen text)")
     }
 
     /// Memory over the bridge, for Claude and other agents.
@@ -962,7 +963,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private func status() -> [String: String] {
         var s = driver.currentTab()
         s["front_app"] = NSWorkspace.shared.frontmostApplication?.localizedName ?? ""
-        s["model"] = model
+        s["model"] = Brain.label(model)
         s["answers"] = answerMode
         s["wake_word"] = wakeActive ? "listening for Hey Jarvis" : "off"
         s["session"] = session ? "on" : "off"
@@ -1116,7 +1117,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         wakeMenu.addItem(off)
 
         answersMenu.removeAllItems()
-        for (mode, title) in [("auto", "Auto: Claude When Connected, Else Offline"), ("claude", "Claude (Online)"), ("local", "Offline Only (\(model))")] {
+        for (mode, title) in [("auto", "Auto: Claude When Connected, Else Offline"), ("claude", "Claude (Online)"), ("local", "Offline Only (\(Brain.label(model)))")] {
             let mi = item(title, #selector(pickAnswerMode(_:)))
             mi.representedObject = mode
             mi.state = answerMode == mode ? .on : .off
@@ -1152,7 +1153,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         modelsMenu.removeAllItems()
         let names = installedModels.contains(model) ? installedModels : [model] + installedModels
         for name in names {
-            let mi = item(name + (installedModels.contains(name) ? "" : "  (not installed)"), #selector(pickModel(_:)))
+            let mi = item(Brain.label(name) + (installedModels.contains(name) ? "" : "  (not installed)"), #selector(pickModel(_:)))
             mi.representedObject = name
             mi.state = name == model ? .on : .off
             modelsMenu.addItem(mi)

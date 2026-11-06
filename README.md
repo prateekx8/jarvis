@@ -27,7 +27,7 @@ J.A.R.V.I.S.-style console with a live log (also written to `~/Library/Logs/Voic
 Build only (for development): `cd app && ./build.sh && open build/Jarvis.app`
 - Say **"Hey Jarvis, open YouTube"** (one breath), or "Hey Jarvis" → chime → your command.
 - Or **hold ⌥Space**, speak, release. Or **tap ⌥Space**, speak, pause.
-- Menu bar 🎙: wake word on/off, Keep Console Open, Open Log File, model (default `gemma2:2b`), browser, spoken replies, recent commands.
+- Menu bar 🎙: wake word on/off, Keep Console Open, Open Log File, model (default: Apple's on-device model when the Mac has it, else `gemma2:2b`), browser, spoken replies, recent commands.
 
 **Browser:** open site · new tab · search · click <label> · type <x> [and press enter] · scroll · back/forward/reload · tab N / last tab · close tab · "what's this page about"
 **Mac:** open/quit <app> · volume up/down/mute/set to N · play/pause/next/previous (Music, Spotify) · dark/light mode · lock screen · open downloads/desktop/documents · time, date, battery
@@ -47,7 +47,7 @@ Questions ("what…", "why…", "explain…") and multi-step tasks are answered 
 Menu → **Answers**: *Auto* (Claude when connected, else offline), *Claude*, or *Offline only*.
 
 - "Hey Jarvis, **Claude,** what's on Hacker News?" → always Claude.
-- "Hey Jarvis, **ask locally** what's the capital of Australia?" → always the local model (Gemma, ~0.5 s).
+- "Hey Jarvis, **ask locally** what's the capital of Australia?" → always the local model (Apple on-device, or Gemma if that is unavailable).
 
 ```
 Jarvis app ── localhost bridge :8777 (token in ~/Library/Application Support/Jarvis/bridge.json)

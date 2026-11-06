@@ -64,8 +64,8 @@ final class SetupModel: ObservableObject {
     }
 
     @Published var steps: [Step] = [
-        Step(id: "ollama", title: "Ollama (runs the AI model locally)"),
-        Step(id: "model", title: "Language model · \(Brain.defaultModel)"),
+        Step(id: "ollama", title: AppleModel.available ? "Ollama (optional fallback model)" : "Ollama (runs the AI model locally)"),
+        Step(id: "model", title: "Language model · \(Brain.label(Brain.preferredModel))"),
         Step(id: "voice", title: "Natural voice · Kokoro"),
         Step(id: "perms", title: "Microphone, speech & automation permissions"),
         Step(id: "chrome", title: "Chrome: Allow JavaScript from Apple Events"),
@@ -126,6 +126,7 @@ final class SetupModel: ObservableObject {
     }
 
     private func ollama() async throws {
+        if AppleModel.available { return update("ollama") { $0.detail = "Not needed: Jarvis uses Apple's on-device model" } }
         if await ollamaUp() { return update("ollama") { $0.detail = "Running" } }
         let home = FileManager.default.homeDirectoryForCurrentUser
         var appURL = NSWorkspace.shared.urlForApplication(withBundleIdentifier: "com.electron.ollama")
@@ -163,6 +164,7 @@ final class SetupModel: ObservableObject {
     // MARK: Model
 
     private func model() async throws {
+        if AppleModel.available { return update("model") { $0.detail = "Built into macOS, nothing to download" } }
         let model = Brain.defaultModel
         if await Brain.installedModels().contains(model) { return update("model") { $0.detail = "Installed" } }
         var req = URLRequest(url: URL(string: Brain.host + "/api/pull")!)
