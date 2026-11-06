@@ -16,6 +16,10 @@
 # Options:  --no-voice   skip the natural voice (Jarvis uses the macOS voice)
 #           --no-ollama  skip Ollama and Gemma (Jarvis answers with Claude or Apple's on-device model)
 #           --no-open    don't open Jarvis at the end
+#           --yes        don't ask before installing
+#
+# It first runs check.sh, which lists what this Mac has and what will be downloaded, and stops if
+# something must be fixed first.
 # Env:      JARVIS_SRC   where to keep the source (default ~/Jarvis)
 #           JARVIS_APPS  where to put Jarvis.app (default /Applications, or ~/Applications)
 #
@@ -32,13 +36,14 @@ KOKORO_BASE="https://github.com/thewh1teagle/kokoro-onnx/releases/download/model
 OLLAMA_URL="https://ollama.com/download/Ollama-darwin.zip"
 OLLAMA_HOST="http://127.0.0.1:11434"
 
-VOICE=1 OLLAMA=1 OPEN=1
+VOICE=1 OLLAMA=1 OPEN=1 YES=0
 for arg in "$@"; do
   case "$arg" in
     --no-voice) VOICE=0 ;;
     --no-ollama) OLLAMA=0 ;;
     --no-open) OPEN=0 ;;
-    -h|--help) sed -n '2,21p' "$0" 2>/dev/null | sed 's/^# \{0,1\}//'; exit 0 ;;
+    --yes|-y) YES=1 ;;
+    -h|--help) sed -n '2,27p' "$0" 2>/dev/null | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) echo "Unknown option: $arg (try --help)"; exit 2 ;;
   esac
 done
@@ -59,10 +64,24 @@ case "$(uname -m)" in
   *) die "Unsupported CPU: $(uname -m)" ;;
 esac
 
-need_gb=1; (( VOICE )) && need_gb=$((need_gb + 1)); (( OLLAMA )) && need_gb=$((need_gb + 2))
-free_gb=$(( $(df -k "$HOME" | awk 'NR==2 {print $4}') / 1024 / 1024 ))
-if (( free_gb < need_gb )); then
-  die "About ${need_gb} GB of free disk space is needed; only ${free_gb} GB is free. Free some space, or use --no-ollama / --no-voice."
+# ---------------------------------------------------------------- 0. prerequisite check
+HERE=""
+if [[ -n "${BASH_SOURCE[0]:-}" && -f "${BASH_SOURCE[0]}" ]]; then
+  HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+fi
+CHECK_ARGS=(); (( VOICE )) || CHECK_ARGS+=(--no-voice); (( OLLAMA )) || CHECK_ARGS+=(--no-ollama)
+if [[ -n "$HERE" && -f "$HERE/check.sh" ]]; then
+  bash "$HERE/check.sh" "${CHECK_ARGS[@]+"${CHECK_ARGS[@]}"}" || die "Fix the items above, then run the installer again."
+elif CHECK="$(curl -fsSL https://raw.githubusercontent.com/prateekx8/jarvis/main/check.sh 2>/dev/null)"; then
+  bash -c "$CHECK" check.sh "${CHECK_ARGS[@]+"${CHECK_ARGS[@]}"}" || die "Fix the items above, then run the installer again."
+else
+  note "Couldn't fetch the prerequisite check; continuing."
+fi
+# Ask before installing when someone is at the keyboard (works with curl | bash too).
+if (( ! YES )) && [[ -r /dev/tty ]] && { : < /dev/tty; } 2>/dev/null; then
+  printf '\n%sInstall now?%s [Y/n] ' "$bold" "$off"
+  read -r answer < /dev/tty || answer=""
+  case "$answer" in [nN]*) echo "Nothing installed."; exit 0 ;; esac
 fi
 
 # Applications folder: /Applications when writable, else ~/Applications (no sudo).
@@ -84,10 +103,6 @@ ok "Swift $(swift --version 2>/dev/null | grep -oE 'version [0-9.]+' | head -1 |
 
 # ---------------------------------------------------------------- 2. source + app
 step "Jarvis app"
-HERE=""
-if [[ -n "${BASH_SOURCE[0]:-}" && -f "${BASH_SOURCE[0]}" ]]; then
-  HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-fi
 if [[ -n "$HERE" && -f "$HERE/app/Package.swift" ]]; then
   SRC="$HERE"
   note "Using this checkout: $SRC"

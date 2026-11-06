@@ -3,7 +3,11 @@
 How it works, and the plan for Shortcuts and iPhone control: [ARCHITECTURE.md](ARCHITECTURE.md).
 
 ## Install (one command)
-macOS 14 or newer. Paste into Terminal:
+macOS 14 or newer. To see first what your Mac already has and what would be downloaded (changes nothing):
+```bash
+curl -fsSL https://raw.githubusercontent.com/prateekx8/jarvis/main/check.sh | bash
+```
+To install, paste into Terminal (it runs the same check first, then asks before installing):
 ```bash
 curl -fsSL https://raw.githubusercontent.com/prateekx8/jarvis/main/install.sh | bash
 ```
@@ -14,7 +18,7 @@ in total. The first time, macOS may ask to install the Command Line Tools (neede
 run the command again. When Jarvis opens, allow Microphone, Speech Recognition and Automation.
 
 Already cloned? Run `./install.sh`. Options: `--no-voice` (use the macOS voice), `--no-ollama` (no offline model),
-`--no-open`. Re-run it any time to update. If a firewall such as LuLu asks about `uv`, `python` or Ollama, allow it.
+`--no-open`, `--yes` (don't ask). Re-run it any time to update. If a firewall such as LuLu asks about `uv`, `python` or Ollama, allow it.
 
 ## The app (recommended): Jarvis
 Menu bar app in `app/`: on-device speech (Apple's Dictation engine), "Hey Jarvis" wake word, ⌥Space hotkey,
